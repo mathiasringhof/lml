@@ -23,3 +23,20 @@
 - CLI tests should check status and meaningful output, not exact help snapshots.
 - Keep `Cargo.lock` tracked. Use `--locked`; update dependencies intentionally.
 - Keep the README current when behavior or development commands change.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live in GitHub Issues for `mathiasringhof/lml`.
+See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the five default triage labels.
+See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Use a single-context layout: root `CONTEXT.md` and `docs/adr/`.
+See `docs/agents/domain.md`.
