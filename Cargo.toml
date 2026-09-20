@@ -3,7 +3,7 @@ name = "lml"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.98.1"
-description = "A terminal application"
+description = "A terminal picker and launcher for local model servers"
 license = "MIT"
 repository = "https://github.com/mathiasringhof/lml"
 publish = false
@@ -11,7 +11,10 @@ publish = false
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
 crossterm = "0.29"
-ratatui = "0.30.2"
+ratatui = { version = "0.30.2", features = ["unstable-rendered-line-info"] }
+serde = { version = "1.0.229", features = ["derive"] }
+tempfile = "3.27.0"
+toml_edit = { version = "0.25.15", features = ["serde"] }
 
 [lints.rust]
 warnings = { level = "deny", priority = -1 }
