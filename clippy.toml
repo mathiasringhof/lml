@@ -1,0 +1,3 @@
+# Test failures should point directly to the failed setup or assertion.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
