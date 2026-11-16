@@ -315,6 +315,173 @@ fn split_models_have_one_profile_and_projectors_are_not_models() -> io::Result<(
 }
 
 #[test]
+fn hf_cache_import_preserves_snapshot_names_and_paths() -> io::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let cache = directory.path().join("hf");
+    let snapshot = cache.join("snapshots/rev");
+    fs::create_dir_all(&snapshot)?;
+    fs::create_dir(cache.join("blobs"))?;
+    let files = [
+        ("M-00001-of-00002.gguf", "a".repeat(64)),
+        ("M-00002-of-00002.gguf", "b".repeat(64)),
+        ("mmproj-M.gguf", "c".repeat(64)),
+        ("Single.gguf", "d".repeat(64)),
+    ];
+    for (name, hash) in &files {
+        fs::write(cache.join("blobs").join(hash), b"GGUF")?;
+        std::os::unix::fs::symlink(format!("../../blobs/{hash}"), snapshot.join(name))?;
+    }
+    let snapshot = snapshot.canonicalize()?;
+    let config = directory.path().join("config.toml");
+    for source in ["hf/snapshots/rev", "hf"] {
+        fs::write(
+            &config,
+            format!(
+                "[runtimes.llama_cpp]\nexecutable = '/usr/bin/true'\nmodel_dirs = ['{source}']\n"
+            ),
+        )?;
+        let invoke = || {
+            Command::new(env!("CARGO_BIN_EXE_lml"))
+                .arg("--config")
+                .arg(&config)
+                .arg("import")
+                .output()
+        };
+        let output = invoke()?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("Added 2"));
+        let saved = fs::read_to_string(&config)?;
+        let document = saved
+            .parse::<toml_edit::DocumentMut>()
+            .expect("valid catalog");
+        let profiles = document["profiles"]
+            .as_array_of_tables()
+            .expect("profile tables");
+        assert_eq!(profiles.len(), 2);
+        for (profile, name) in profiles.iter().zip(["M-00001-of-00002", "Single"]) {
+            assert_eq!(profile["name"].as_str(), Some(name));
+            assert_eq!(
+                profile["id"].as_str(),
+                Some(format!("llama-cpp-{}", name.to_ascii_lowercase()).as_str())
+            );
+            assert_eq!(
+                profile["model"].as_str(),
+                snapshot.join(format!("{name}.gguf")).to_str()
+            );
+        }
+        assert!(!saved.contains("mmproj"));
+        assert!(!saved.contains("M-00002-of-00002"));
+        for (_, hash) in &files {
+            assert!(!saved.contains(hash));
+        }
+        let output = invoke()?;
+        assert!(output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains("Added 0"));
+        assert_eq!(fs::read_to_string(&config)?, saved);
+    }
+    Ok(())
+}
+
+#[test]
+fn import_chooses_the_smallest_discovered_path_for_aliases() -> io::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let cache = directory.path().join("hf");
+    fs::create_dir_all(cache.join("blobs"))?;
+    let hash = "a".repeat(64);
+    fs::write(cache.join("blobs").join(&hash), b"GGUF")?;
+    for revision in ["z-rev", "a-rev"] {
+        let snapshot = cache.join("snapshots").join(revision);
+        fs::create_dir_all(&snapshot)?;
+        for name in ["Z-alias.gguf", "A-model.gguf"] {
+            std::os::unix::fs::symlink(format!("../../blobs/{hash}"), snapshot.join(name))?;
+        }
+    }
+    let expected = cache.canonicalize()?.join("snapshots/a-rev/A-model.gguf");
+    let config = directory.path().join("config.toml");
+    for sources in [
+        "'hf/snapshots/z-rev', 'hf/snapshots/a-rev'",
+        "'hf/snapshots/a-rev', 'hf/snapshots/z-rev'",
+        "'hf'",
+    ] {
+        fs::write(
+            &config,
+            format!(
+                "[runtimes.llama_cpp]\nexecutable = '/usr/bin/true'\nmodel_dirs = [{sources}]\n"
+            ),
+        )?;
+        let invoke = || {
+            Command::new(env!("CARGO_BIN_EXE_lml"))
+                .arg("--config")
+                .arg(&config)
+                .arg("import")
+                .output()
+        };
+        let output = invoke()?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("Added 1"));
+        let saved = fs::read_to_string(&config)?;
+        let document = saved
+            .parse::<toml_edit::DocumentMut>()
+            .expect("valid catalog");
+        let profiles = document["profiles"]
+            .as_array_of_tables()
+            .expect("profile tables");
+        assert_eq!(profiles.len(), 1);
+        let profile = profiles.get(0).expect("imported profile");
+        assert_eq!(profile["id"].as_str(), Some("llama-cpp-a-model"));
+        assert_eq!(profile["name"].as_str(), Some("A-model"));
+        assert_eq!(profile["model"].as_str(), expected.to_str());
+        let output = invoke()?;
+        assert!(output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains("Added 0"));
+        assert_eq!(fs::read_to_string(&config)?, saved);
+    }
+    Ok(())
+}
+
+#[test]
+fn hf_cache_import_preserves_profiles_with_canonical_blob_paths() -> io::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let cache = directory.path().join("hf");
+    let snapshot = cache.join("snapshots/rev");
+    fs::create_dir_all(&snapshot)?;
+    fs::create_dir(cache.join("blobs"))?;
+    let hash = "a".repeat(64);
+    let blob = cache.join("blobs").join(&hash);
+    fs::write(&blob, b"GGUF")?;
+    std::os::unix::fs::symlink(format!("../../blobs/{hash}"), snapshot.join("M.gguf"))?;
+    let config = directory.path().join("config.toml");
+    let original = format!(
+        "[runtimes.llama_cpp]\nexecutable = '/usr/bin/true'\nmodel_dirs = ['hf']\n\n[[profiles]]\nid = 'llama-cpp-{hash}'\nname = '{hash}'\nruntime = 'llama_cpp'\nmodel = '{}'\nargs = ['--ctx-size', '8192'] # keep this\n",
+        blob.canonicalize()?.display()
+    );
+    fs::write(&config, &original)?;
+    for _ in 0..2 {
+        let output = Command::new(env!("CARGO_BIN_EXE_lml"))
+            .arg("--config")
+            .arg(&config)
+            .arg("import")
+            .output()?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("Added 0"));
+        assert_eq!(fs::read_to_string(&config)?, original);
+    }
+    Ok(())
+}
+
+#[test]
 fn import_accepts_an_explicitly_empty_profile_list() -> io::Result<()> {
     let directory = tempfile::tempdir()?;
     let config = directory.path().join("config.toml");
