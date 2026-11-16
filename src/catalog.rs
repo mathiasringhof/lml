@@ -227,8 +227,10 @@ impl Catalog {
                     &mut models,
                 )?;
             }
+            // Sorted discovered paths choose a stable alias for each resolved model.
             for path in models {
-                if !represented.insert((runtime, path.clone())) {
+                let identity = fs::canonicalize(&path)?;
+                if !represented.insert((runtime, identity)) {
                     continue;
                 }
                 let name = path
@@ -320,11 +322,9 @@ fn discover(
             && path
                 .extension()
                 .is_some_and(|extension| extension.eq_ignore_ascii_case("gguf"))
+            && is_primary_model(&path)
         {
-            let model = fs::canonicalize(path)?;
-            if is_primary_model(&model) {
-                models.insert(model);
-            }
+            models.insert(path);
         }
     }
     Ok(())
